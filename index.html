@@ -30,48 +30,44 @@ async function loadLiveBoard(){
     const liveGames=await sb(gamePath);
     if(!liveGames.length) throw new Error('No upcoming games returned');
     const ids=liveGames.map(x=>x.id).join(',');
-    let recs=[];
-    if(ids){
-      recs=await sb('prime_recommendations?select=id,game_id,market_type,selection_label,line,american_odds,confidence,confidence_tier,trap_risk,status,generated_at&game_id=in.('+ids+')&status=in.(active,watch,recheck)&order=confidence.desc&limit=500');
-    }
-    const byGame={};
+    const [recs,markets,props]=await Promise.all([
+      sb('prime_recommendations?select=id,game_id,market_type,selection_label,line,american_odds,confidence,confidence_tier,trap_risk,status,generated_at&game_id=in.('+ids+')&status=in.(active,watch,recheck)&order=confidence.desc&limit=500'),
+      sb('game_markets?select=game_id,market_type,period,side,line,american_odds,observed_at,is_live&game_id=in.('+ids+')&period=eq.full_game&is_available=eq.true&order=observed_at.desc&limit=5000'),
+      sb('player_props?select=game_id,player_id,prop_type,side,line,american_odds,observed_at&game_id=in.('+ids+')&is_available=eq.true&order=observed_at.desc&limit=1000')
+    ]);
+    const byGame={}, marketByGame={}, propByGame={};
     recs.forEach(r=>(byGame[r.game_id]??=[]).push(r));
+    markets.forEach(m=>(marketByGame[m.game_id]??=[]).push(m));
+    props.forEach(p=>(propByGame[p.game_id]??=[]).push(p));
+    const odds=o=>o==null?'':(o>0?'+':'')+o;
+    const lineTxt=m=>m?((m.line!=null?m.line:'')+(m.american_odds!=null?' ('+odds(m.american_odds)+')':'')):'—';
+    const latest=(arr,type,side)=>arr.find(m=>m.market_type===type&&(!side||m.side===side));
     const mapped=liveGames.map(g=>{
-      const list=byGame[g.id]||[];
-      const best=list[0]||null;
-      const ft=fmtGameTime(g.scheduled_at);
-      return {
-        id:g.id,lg:g.sport,day:ft.day,
-        title:(g.away_team_name||g.away_team_key)+' @ '+(g.home_team_name||g.home_team_key),
-        pick:best?best.selection_label:'Prime pick pending',
-        c:best?best.confidence:'—',
-        t:best?best.confidence_tier:'Pending',
-        line:best&&best.line!=null?String(best.line):'—',
-        open:'—',move:'Live market',trap:best&&best.trap_risk?best.trap_risk[0].toUpperCase()+best.trap_risk.slice(1):'Pending',
-        weather:'Pending',inj:'Pending',time:ft.time,
-        venue:g.venue_name||'Venue pending',
-        loc:[g.venue_city,g.venue_state].filter(Boolean).join(', ')||'Location pending',
-        tl:list.slice(0,4).map(r=>['Current',r.selection_label+' · '+r.confidence+' '+r.confidence_tier]),
-        alts:list.filter(r=>r.market_type==='spread'||r.market_type==='alt_spread'||r.market_type==='moneyline').slice(0,6).map(r=>[r.selection_label,r.confidence,r.confidence_tier]),
-        players:[]
-      };
+      const list=byGame[g.id]||[], ms=marketByGame[g.id]||[];
+      const best=list[0]||null, ft=fmtGameTime(g.scheduled_at);
+      const homeSpread=latest(ms,'spread',g.home_team_key)||latest(ms,'spread','home');
+      const awaySpread=latest(ms,'spread',g.away_team_key)||latest(ms,'spread','away');
+      const homeML=latest(ms,'moneyline',g.home_team_key)||latest(ms,'moneyline','home');
+      const awayML=latest(ms,'moneyline',g.away_team_key)||latest(ms,'moneyline','away');
+      const over=latest(ms,'total','over'), under=latest(ms,'total','under');
+      const current=homeSpread||awaySpread;
+      const seen=new Set(), ladder=[];
+      ms.filter(m=>['spread','alt_spread','moneyline'].includes(m.market_type)).forEach(m=>{const k=m.market_type+'|'+m.side+'|'+m.line;if(!seen.has(k)&&ladder.length<8){seen.add(k);ladder.push([(m.side||'').toUpperCase()+' '+(m.market_type==='moneyline'?'ML':lineTxt(m)),best?best.confidence:'Market','Live']);}});
+      const marketSummary='Spread: '+(awaySpread?(g.away_team_key+' '+lineTxt(awaySpread)):'—')+' / '+(homeSpread?(g.home_team_key+' '+lineTxt(homeSpread)):'—')+' · ML: '+(awayML?(g.away_team_key+' '+odds(awayML.american_odds)):'—')+' / '+(homeML?(g.home_team_key+' '+odds(homeML.american_odds)):'—')+' · Total: '+(over?('O '+lineTxt(over)):'—');
+      return {id:g.id,lg:g.sport,day:ft.day,title:(g.away_team_name||g.away_team_key)+' @ '+(g.home_team_name||g.home_team_key),
+        pick:best?best.selection_label:'Market intelligence live',c:best?best.confidence:'LIVE',t:best?best.confidence_tier:'Market',
+        line:current?lineTxt(current):'Markets available',open:'See timeline',move:marketSummary,trap:best&&best.trap_risk?best.trap_risk[0].toUpperCase()+best.trap_risk.slice(1):'Pending',
+        weather:'Pending',inj:'Data available',time:ft.time,venue:g.venue_name||'Venue pending',loc:[g.venue_city,g.venue_state].filter(Boolean).join(', ')||'Location pending',
+        tl:[['Current market',marketSummary],...list.slice(0,3).map(r=>['PrimeLine',r.selection_label+' · '+r.confidence+' '+r.confidence_tier])],
+        alts:ladder.length?ladder:[['Market ladder loading','—','Pending']],players:[]};
     });
-    G.splice(0,G.length,...mapped);
-    render();
-    const elite=recs.filter(r=>r.confidence>=95).length;
-    const strong=recs.filter(r=>r.confidence>=90&&r.confidence<95).length;
-    document.getElementById('eliteCount').textContent=elite;
-    document.getElementById('veryStrongCount').textContent=strong;
-    document.getElementById('pendingCount').textContent=mapped.filter(g=>g.t==='Pending').length;
-    const top=recs[0];
-    document.getElementById('liveAlert').innerHTML=top
-      ? '<i>🔥</i><div><b>Top Live Recommendation</b><p>'+top.selection_label+' is '+top.confidence+' '+top.confidence_tier+'.</p></div>'
-      : '<i>⏳</i><div><b>Schedule Live · Recommendations Pending</b><p>Upcoming games are coming from Supabase. PrimeLine recommendations will appear automatically when the engine publishes them.</p></div>';
-  }catch(e){
-    document.getElementById('liveAlert').innerHTML='<i>⚠️</i><div><b>Live feed unavailable</b><p>'+e.message+'. Showing demo board.</p></div>';
-  }
+    G.splice(0,G.length,...mapped); render();
+    document.getElementById('eliteCount').textContent=recs.filter(r=>r.confidence>=95).length;
+    document.getElementById('veryStrongCount').textContent=recs.filter(r=>r.confidence>=90&&r.confidence<95).length;
+    document.getElementById('pendingCount').textContent=mapped.filter(g=>g.t==='Market').length;
+    document.getElementById('liveAlert').innerHTML='<i>⚡</i><div><b>Live Sportsbook Markets Connected</b><p>'+mapped.length+' upcoming CFB/NFL games loaded. PrimeLine scores will layer in as recommendations publish.</p></div>';
+  }catch(e){document.getElementById('liveAlert').innerHTML='<i>⚠️</i><div><b>Live feed unavailable</b><p>'+e.message+'. Showing demo board.</p></div>';}
 }
-
 function rc(v){return v==='Low'?'good':v==='Medium'?'warn':v==='High'?'bad':''}function tc(t){return t==='Elite'||t==='Very Strong'?'good':t==='Strong'?'warn':''}function render(){games.innerHTML=G.map(g=>`<div class="game" onclick="openG('${g.id}')"><div class="top"><div><div class="title">${g.title}</div><div class="sub">${g.day} · ${g.time} · ${g.loc}</div></div><div class="conf">${g.c}</div></div><div class="sub">${g.pick} · Current ${g.line} · Open ${g.open}</div><div class="badges"><span class="badge ${tc(g.t)}">${g.t}</span><span class="badge ${rc(g.trap)}">Trap ${g.trap}</span><span class="badge">${g.weather} weather</span><span class="badge">${g.move}</span></div></div>`).join('')}
 function openG(id){let g=G.find(x=>x.id===id);detail.innerHTML=`<div class="detail"><div class="eyebrow">${g.lg} · ${g.day}</div><h2>${g.title}</h2><p>${g.time} · ${g.venue} · ${g.loc}</p><div class="big">${g.c} <span>${g.t}</span></div><div class="badges"><span class="badge ${rc(g.trap)}">Trap ${g.trap}</span><span class="badge">${g.weather} weather</span><span class="badge">${g.inj} injuries</span></div><div class="grid"><div class="box"><span>Opening line</span><b>${g.open}</b></div><div class="box"><span>Current line</span><b>${g.line}</b></div><div class="box"><span>Movement</span><b>${g.move}</b></div><div class="box"><span>Prime pick</span><b>${g.pick}</b></div></div></div><div class="panel"><h3>Game Intelligence Timeline</h3><div class="timeline">${g.tl.map(x=>`<div><b>${x[0]}</b><p>${x[1]}</p></div>`).join('')}</div></div><div class="panel"><h3>ALT Line Ladder</h3><p>Compare confidence as you buy the line down.</p><table><tr><th>Line</th><th>Prime Conf.</th><th>Rating</th></tr>${g.alts.map(a=>`<tr><td>${a[0]}</td><td>${a[1]}</td><td>${a[2]}</td></tr>`).join('')}</table></div><div class="panel"><h3>Prime Players</h3><p>Highest-rated player thresholds in this matchup.</p><table><tr><th>Player</th><th>Market</th><th>Conf.</th><th>Rating</th></tr>${g.players.map(a=>`<tr><td>${a[0]}</td><td>${a[1]}</td><td>${a[2]}</td><td>${a[3]}</td></tr>`).join('')}</table></div>`;show('game')}
 function show(id){document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));document.getElementById(id).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.v===id));scrollTo(0,0)}document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>show(b.dataset.v));lr.oninput=()=>{lv.textContent=lr.value;document.querySelectorAll('.presets button').forEach(b=>b.classList.toggle('sel',+b.dataset.n===+lr.value))};document.querySelectorAll('.presets button').forEach(b=>b.onclick=()=>{lr.value=b.dataset.n;lv.textContent=b.dataset.n;document.querySelectorAll('.presets button').forEach(x=>x.classList.remove('sel'));b.classList.add('sel')});function name(n){return n<=3?'Spark':n<=5?'Boost':n<=10?'Momentum':n<=15?'Power':'Prime Run'}bb.onclick=()=>{let n=+lr.value,p=[['Chiefs ML',96,'Elite'],['Indiana ML',96,'Elite'],['Chiefs -3.5',95,'Elite'],['Packers ML',94,'Very Strong'],['Indiana -7.5',94,'Very Strong'],['Mahomes 1+ Pass TD',96,'Elite'],['Bills ML',93,'Very Strong'],['49ers ML',93,'Very Strong'],['Indiana QB 1+ Pass TD',93,'Very Strong'],['Chiefs RB1 50+ Rush Yds',91,'Very Strong'],['Georgia ML',91,'Very Strong'],['Packers QB 1+ Pass TD',92,'Very Strong'],['Indiana -10.5',91,'Very Strong'],['Seattle ML',88,'Strong'],['Lions ML',88,'Strong'],['Georgia RB1 40+ Rush Yds',87,'Strong'],['Texas Tech -20.5',93,'Very Strong'],['Miami -21.5',94,'Very Strong'],['SMU -20.5',93,'Very Strong'],['Notre Dame -14.5',92,'Very Strong']].slice(0,n),avg=(p.reduce((s,x)=>s+x[1],0)/p.length).toFixed(1);ticket.classList.remove('hidden');ticket.innerHTML=`<div class="top"><div><div class="eyebrow">${name(n).toUpperCase()}</div><h3>${n}-Leg Ticket</h3><p>Prime Confidence ${avg}</p></div><div class="conf">${avg}</div></div><ol>${p.map(x=>`<li>${x[0]} <span class="sub">· ${x[1]} ${x[2]}</span></li>`).join('')}</ol><div class="panel"><b>Reality Check</b><p>Weekly exposure after a $5 stake would be $40 of the $100 example limit. No unusual concentration flags in this demo.</p></div>`;ticket.scrollIntoView({behavior:'smooth'})};render();loadLiveBoard();
