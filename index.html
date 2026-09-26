@@ -76,7 +76,21 @@ async function loadHistory(g){
     const rows=(await sb(path)).filter(x=>x.id!==g.id);
     const el=document.getElementById('history-'+g.id); if(!el)return;
     if(!rows.length){el.innerHTML='<p>No prior meetings are currently available in the PrimeLine database.</p>';return;}
-    el.innerHTML='<table><tr><th>Date</th><th>Matchup</th><th>Final</th><th>Location</th></tr>'+rows.map(x=>'<tr><td>'+new Date(x.scheduled_at).toLocaleDateString()+'</td><td>'+(x.away_team_name||x.away_team_key)+' @ '+(x.home_team_name||x.home_team_key)+'</td><td>'+(x.away_score!=null&&x.home_score!=null?(x.away_score+'–'+x.home_score):'Score pending')+'</td><td>'+([x.venue_city,x.venue_state].filter(Boolean).join(', ')||x.venue_name||'—')+'</td></tr>').join('')+'</table><p class="sub">Final scores are sourced from the results feed when available. ATS/O-U history is the next enrichment.</p>';
+    const histIds=rows.map(x=>x.id).join(',');
+    let odds=[];
+    if(histIds) odds=await sb('odds_snapshots?select=game_id,market_type,side,line,observed_at&game_id=in.('+histIds+')&period=eq.full_game&is_live=eq.false&market_type=in.(spread,total)&order=observed_at.desc&limit=1000');
+    const by={}; odds.forEach(o=>(by[o.game_id]??=[]).push(o));
+    const calc=x=>{
+      if(x.away_score==null||x.home_score==null)return {ats:'—',ou:'—'};
+      const os=by[x.id]||[];
+      const sp=os.find(o=>o.market_type==='spread'&&o.side==='home')||os.find(o=>o.market_type==='spread'&&o.side==='away');
+      const tot=os.find(o=>o.market_type==='total'&&o.side==='over')||os.find(o=>o.market_type==='total');
+      let ats='—',ou='—';
+      if(sp&&sp.line!=null){let homeLine=Number(sp.line);if(sp.side==='away')homeLine=-homeLine;const adj=Number(x.home_score)+homeLine-Number(x.away_score);ats=adj>0?(x.home_team_key+' covered'):adj<0?(x.away_team_key+' covered'):'Push';}
+      if(tot&&tot.line!=null){const sum=Number(x.away_score)+Number(x.home_score),line=Number(tot.line);ou=sum>line?'Over '+line:sum<line?'Under '+line:'Push '+line;}
+      return {ats,ou};
+    };
+    el.innerHTML='<table><tr><th>Date</th><th>Matchup</th><th>Final</th><th>ATS</th><th>O/U</th></tr>'+rows.map(x=>{const r=calc(x);return '<tr><td>'+new Date(x.scheduled_at).toLocaleDateString()+'</td><td>'+(x.away_team_name||x.away_team_key)+' @ '+(x.home_team_name||x.home_team_key)+'</td><td>'+(x.away_score!=null&&x.home_score!=null?(x.away_score+'–'+x.home_score):'Pending')+'</td><td>'+r.ats+'</td><td>'+r.ou+'</td></tr>'}).join('')+'</table><p class="sub">ATS and O/U use the latest stored pregame line for that historical meeting. — means no qualifying line is stored.</p>';
   }catch(e){const el=document.getElementById('history-'+g.id);if(el)el.innerHTML='<p>Matchup history is temporarily unavailable.</p>';}
 }
 function openG(id){let g=G.find(x=>x.id===id);detail.innerHTML=`<div class="detail"><div class="eyebrow">${g.lg} · ${g.day}</div><h2>${g.title}</h2><p>${g.time} · ${g.venue} · ${g.loc}</p><div class="big">${g.c} <span>${g.t}</span></div><div class="badges"><span class="badge ${rc(g.trap)}">Trap ${g.trap}</span><span class="badge">${g.weather} weather</span><span class="badge">${g.inj} injuries</span></div><div class="grid"><div class="box"><span>Opening line</span><b>${g.open}</b></div><div class="box"><span>Current line</span><b>${g.line}</b></div><div class="box"><span>Movement</span><b>${g.move}</b></div><div class="box"><span>Prime pick</span><b>${g.pick}</b></div></div></div><div class="panel"><h3>Game Intelligence Timeline</h3><div class="timeline">${g.tl.map(x=>`<div><b>${x[0]}</b><p>${x[1]}</p></div>`).join('')}</div></div><div class="panel"><h3>ALT Line Ladder</h3><p>Compare confidence as you buy the line down.</p><table><tr><th>Line</th><th>Prime Conf.</th><th>Rating</th></tr>${g.alts.map(a=>`<tr><td>${a[0]}</td><td>${a[1]}</td><td>${a[2]}</td></tr>`).join('')}</table></div><div class="panel"><h3>Prime Players</h3><p>Highest-rated player thresholds in this matchup.</p><table><tr><th>Player</th><th>Market</th><th>Conf.</th><th>Rating</th></tr>${g.players.map(a=>`<tr><td>${a[0]}</td><td>${a[1]}</td><td>${a[2]}</td><td>${a[3]}</td></tr>`).join('')}</table></div><div class="panel"><h3>Matchup History</h3><p>Recent head-to-head meetings between these teams.</p><div id="history-${g.id}"><p>Loading matchup history…</p></div></div>`;show('game');loadHistory(g)}
