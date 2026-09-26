@@ -25,19 +25,20 @@ function fmtGameTime(v){
 }
 async function loadLiveBoard(){
   try{
-    const now=new Date(), end=new Date(now.getTime()+72*60*60*1000);
-    const gamePath='games?select=id,sport,away_team_name,home_team_name,away_team_key,home_team_key,scheduled_at,venue_name,venue_city,venue_state&sport=in.(CFB,NFL)&scheduled_at=gte.'+encodeURIComponent(now.toISOString())+'&scheduled_at=lte.'+encodeURIComponent(end.toISOString())+'&order=scheduled_at.asc&limit=80';
+    const now=new Date(); const start=new Date(now); start.setHours(0,0,0,0); const end=new Date(start); end.setDate(end.getDate()+1);
+    const gamePath='games?select=id,sport,away_team_name,home_team_name,away_team_key,home_team_key,scheduled_at,venue_name,venue_city,venue_state&sport=in.(CFB,NFL)&scheduled_at=gte.'+encodeURIComponent(start.toISOString())+'&scheduled_at=lt.'+encodeURIComponent(end.toISOString())+'&order=scheduled_at.asc&limit=200';
     const liveGames=await sb(gamePath);
     if(!liveGames.length) throw new Error('No upcoming games returned');
     const ids=liveGames.map(x=>x.id).join(',');
-    const [recs,markets,props,players,injuries]=await Promise.all([
+    const marketChunks=[]; for(let i=0;i<liveGames.length;i+=10){const chunk=liveGames.slice(i,i+10).map(x=>x.id).join(',');marketChunks.push(sb('game_markets?select=game_id,market_type,period,side,line,american_odds,observed_at,is_live&game_id=in.('+chunk+')&period=eq.full_game&is_available=eq.true&order=observed_at.desc&limit=5000'));}
+    const [recs,marketParts,props,players,injuries]=await Promise.all([
       sb('prime_recommendations?select=id,game_id,market_type,selection_label,line,american_odds,confidence,confidence_tier,trap_risk,status,generated_at&game_id=in.('+ids+')&status=in.(active,watch,recheck)&order=confidence.desc&limit=500'),
-      sb('game_markets?select=game_id,market_type,period,side,line,american_odds,observed_at,is_live&game_id=in.('+ids+')&period=eq.full_game&is_available=eq.true&order=observed_at.desc&limit=5000'),
+      Promise.all(marketChunks),
       sb('player_props?select=game_id,player_id,prop_type,side,line,american_odds,observed_at&game_id=in.('+ids+')&is_available=eq.true&order=observed_at.desc&limit=5000'),
       sb('players?select=id,display_name,team_key&sport=in.(CFB,NFL)&limit=5000'),
       sb('injuries?select=team_key,player_id,status,body_part,practice_status,notes,impact_level,provider_updated_at&team_key=in.('+[...new Set(liveGames.flatMap(g=>[g.away_team_key,g.home_team_key]))].join(',')+')&order=provider_updated_at.desc&limit=5000')
     ]);
-    const byGame={}, marketByGame={}, propByGame={}, playerMap=Object.fromEntries(players.map(p=>[p.id,p])), injuryByTeam={}; injuries.forEach(i=>(injuryByTeam[i.team_key]??=[]).push(i));
+    const markets=marketParts.flat(); const byGame={}, marketByGame={}, propByGame={}, playerMap=Object.fromEntries(players.map(p=>[p.id,p])), injuryByTeam={}; injuries.forEach(i=>(injuryByTeam[i.team_key]??=[]).push(i));
     recs.forEach(r=>(byGame[r.game_id]??=[]).push(r));
     markets.forEach(m=>(marketByGame[m.game_id]??=[]).push(m));
     props.forEach(p=>(propByGame[p.game_id]??=[]).push(p));
