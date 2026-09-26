@@ -45,10 +45,10 @@ async function loadLiveBoard(){
     const mapped=liveGames.map(g=>{
       const list=byGame[g.id]||[], ms=marketByGame[g.id]||[];
       const best=list[0]||null, ft=fmtGameTime(g.scheduled_at);
-      const homeSpread=latest(ms,'spread',g.home_team_key)||latest(ms,'spread','home');
-      const awaySpread=latest(ms,'spread',g.away_team_key)||latest(ms,'spread','away');
-      const homeML=latest(ms,'moneyline',g.home_team_key)||latest(ms,'moneyline','home');
-      const awayML=latest(ms,'moneyline',g.away_team_key)||latest(ms,'moneyline','away');
+      const homeSpread=latest(ms,'spread','home');
+      const awaySpread=latest(ms,'spread','away');
+      const homeML=latest(ms,'moneyline','home');
+      const awayML=latest(ms,'moneyline','away');
       const over=latest(ms,'total','over'), under=latest(ms,'total','under');
       const current=homeSpread||awaySpread;
       const seen=new Set(), ladder=[];
@@ -59,7 +59,7 @@ async function loadLiveBoard(){
         line:current?lineTxt(current):'Markets available',open:'See timeline',move:marketSummary,trap:best&&best.trap_risk?best.trap_risk[0].toUpperCase()+best.trap_risk.slice(1):'Pending',
         weather:'Pending',inj:'Data available',time:ft.time,venue:g.venue_name||'Venue pending',loc:[g.venue_city,g.venue_state].filter(Boolean).join(', ')||'Location pending',
         tl:[['Current market',marketSummary],...list.slice(0,3).map(r=>['PrimeLine',r.selection_label+' · '+r.confidence+' '+r.confidence_tier])],
-        alts:ladder.length?ladder:[['Market ladder loading','—','Pending']],players:[],awayKey:g.away_team_key,homeKey:g.home_team_key,history:null};
+        alts:ladder.length?ladder:[['Market ladder loading','—','Pending']],players:[],awayKey:g.away_team_key,homeKey:g.home_team_key,history:null,awayML:awayML?odds(awayML.american_odds):'—',homeML:homeML?odds(homeML.american_odds):'—',awaySpread:awaySpread?lineTxt(awaySpread):'—',homeSpread:homeSpread?lineTxt(homeSpread):'—',total:over?('O '+lineTxt(over)):(under?('U '+lineTxt(under)):'—')};
     });
     G.splice(0,G.length,...mapped); render();
     document.getElementById('eliteCount').textContent=recs.filter(r=>r.confidence>=95).length;
@@ -68,7 +68,7 @@ async function loadLiveBoard(){
     document.getElementById('liveAlert').innerHTML='<i>⚡</i><div><b>Live Sportsbook Markets Connected</b><p>'+mapped.length+' upcoming CFB/NFL games loaded. PrimeLine scores will layer in as recommendations publish.</p></div>';
   }catch(e){document.getElementById('liveAlert').innerHTML='<i>⚠️</i><div><b>Live feed unavailable</b><p>'+e.message+'. Showing demo board.</p></div>';}
 }
-function rc(v){return v==='Low'?'good':v==='Medium'?'warn':v==='High'?'bad':''}function tc(t){return t==='Elite'||t==='Very Strong'?'good':t==='Strong'?'warn':''}function render(){games.innerHTML=G.map(g=>`<div class="game" onclick="openG('${g.id}')"><div class="top"><div><div class="title">${g.title}</div><div class="sub">${g.day} · ${g.time} · ${g.loc}</div></div><div class="conf">${g.c}</div></div><div class="sub">${g.pick} · Current ${g.line} · Open ${g.open}</div><div class="badges"><span class="badge ${tc(g.t)}">${g.t}</span><span class="badge ${rc(g.trap)}">Trap ${g.trap}</span><span class="badge">${g.weather} weather</span><span class="badge">${g.move}</span></div></div>`).join('')}
+function rc(v){return v==='Low'?'good':v==='Medium'?'warn':v==='High'?'bad':''}function tc(t){return t==='Elite'||t==='Very Strong'?'good':t==='Strong'?'warn':''}function render(){games.innerHTML=G.map(g=>`<div class="game" onclick="openG('${g.id}')"><div class="top"><div><div class="title">${g.title}</div><div class="sub">${g.day} · ${g.time} · ${g.loc}</div></div><div class="conf">${g.c}</div></div><div class="grid"><div class="box"><span>${g.awayKey||'Away'} ML</span><b>${g.awayML||'—'}</b></div><div class="box"><span>${g.homeKey||'Home'} ML</span><b>${g.homeML||'—'}</b></div><div class="box"><span>Current spread</span><b>${g.awayKey||'Away'} ${g.awaySpread||'—'}</b></div><div class="box"><span>Game total</span><b>${g.total||'—'}</b></div></div><div class="sub">${g.pick}</div><div class="badges"><span class="badge ${tc(g.t)}">${g.t}</span><span class="badge ${rc(g.trap)}">Trap ${g.trap}</span></div></div>`).join('')}
 async function loadHistory(g){
   try{
     const a=encodeURIComponent(g.awayKey),h=encodeURIComponent(g.homeKey);
